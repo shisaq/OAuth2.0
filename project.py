@@ -3,7 +3,7 @@ app = Flask(__name__)
 
 from sqlalchemy import create_engine, asc
 from sqlalchemy.orm import sessionmaker
-from database_setup import Base, Restaurant, MenuItem
+from database_setup import Base, User, Restaurant, MenuItem
 
 # login session
 from flask import session as login_session
@@ -19,7 +19,7 @@ CLIENT_ID = json.loads(
   open('client_secret.json', 'r').read())['web']['client_id']
 
 #Connect to Database and create database session
-engine = create_engine('sqlite:///restaurantmenu.db')
+engine = create_engine('sqlite:///restaurantmenuwithusers.db')
 Base.metadata.bind = engine
 
 DBSession = sessionmaker(bind=engine)
@@ -95,6 +95,12 @@ def gconnect():
   login_session['picture'] = data['picture']
   login_session['email'] = data['email']
 
+  # see if user exists, if it doesn't make a new one
+  user_id = getUserID(login_session['email'])
+  if not user_id:
+    user_id = createUser(login_session)
+  login_session['user_id'] = user_id
+
   output = ''
   output += '<h1>Welcome, '
   output += login_session['username']
@@ -160,7 +166,10 @@ def restaurantsJSON():
 @app.route('/restaurant/')
 def showRestaurants():
   restaurants = session.query(Restaurant).order_by(asc(Restaurant.name))
-  return render_template('restaurants.html', restaurants = restaurants)
+  if 'username' not in login_session:
+    return render_template('publicrestaurants.html', restaurants = restaurants)
+  else:
+    return render_template('restaurants.html', restaurants = restaurants)
 
 #Create a new restaurant
 @app.route('/restaurant/new/', methods=['GET','POST'])
@@ -168,7 +177,7 @@ def newRestaurant():
   if 'username' not in login_session:
     return redirect('/login')
   if request.method == 'POST':
-      newRestaurant = Restaurant(name = request.form['name'])
+      newRestaurant = Restaurant(name = request.form['name'], user_id = login_session['user_id'])
       session.add(newRestaurant)
       flash('New Restaurant %s Successfully Created' % newRestaurant.name)
       session.commit()
@@ -182,6 +191,8 @@ def editRestaurant(restaurant_id):
   if 'username' not in login_session:
     return redirect('/login')
   editedRestaurant = session.query(Restaurant).filter_by(id = restaurant_id).one()
+  if editedRestaurant.user_id != login_session['user_id']:
+    return "<script>function myFunction() {alert('You are not authorized to edit this restaurant. Please create your own restaurant in order to edit.');}</script><body onload='myFunction()''>"
   if request.method == 'POST':
       if request.form['name']:
         editedRestaurant.name = request.form['name']
@@ -197,6 +208,8 @@ def deleteRestaurant(restaurant_id):
   if 'username' not in login_session:
     return redirect('/login')
   restaurantToDelete = session.query(Restaurant).filter_by(id = restaurant_id).one()
+  if restaurantToDelete.user_id != login_session['user_id']:
+    return "<script>function myFunction() {alert('You are not authorized to edit this restaurant. Please create your own restaurant in order to edit.');}</script><body onload='myFunction()''>"
   if request.method == 'POST':
     session.delete(restaurantToDelete)
     flash('%s Successfully Deleted' % restaurantToDelete.name)
@@ -211,9 +224,10 @@ def deleteRestaurant(restaurant_id):
 def showMenu(restaurant_id):
     restaurant = session.query(Restaurant).filter_by(id = restaurant_id).one()
     items = session.query(MenuItem).filter_by(restaurant_id = restaurant_id).all()
-    return render_template('menu.html', items = items, restaurant = restaurant)
-
-
+    creator = getUserInfo(restaurant.user_id)
+    if 'username' not in login_session or creator.id != login_session['user_id']:
+      return render_template('publicmenu.html', items = items, restaurant = restaurant, creator = creator)
+    return render_template('menu.html', items = items, restaurant = restaurant, creator = creator)
 
 #Create a new menu item
 @app.route('/restaurant/<int:restaurant_id>/menu/new/',methods=['GET','POST'])
@@ -221,6 +235,8 @@ def newMenuItem(restaurant_id):
   if 'username' not in login_session:
     return redirect('/login')
   restaurant = session.query(Restaurant).filter_by(id = restaurant_id).one()
+  if restaurant.user_id != login_session['user_id']:
+    return 'You just can modify your own restaurant.'
   if request.method == 'POST':
       newItem = MenuItem(name = request.form['name'], description = request.form['description'], price = request.form['price'], course = request.form['course'], restaurant_id = restaurant_id)
       session.add(newItem)
@@ -237,6 +253,8 @@ def editMenuItem(restaurant_id, menu_id):
     return redirect('/login')
   editedItem = session.query(MenuItem).filter_by(id = menu_id).one()
   restaurant = session.query(Restaurant).filter_by(id = restaurant_id).one()
+  if restaurant.user_id != login_session['user_id']:
+    return 'You just can modify your own restaurant.'
   if request.method == 'POST':
       if request.form['name']:
           editedItem.name = request.form['name']
@@ -261,6 +279,8 @@ def deleteMenuItem(restaurant_id,menu_id):
     return redirect('/login')
   restaurant = session.query(Restaurant).filter_by(id = restaurant_id).one()
   itemToDelete = session.query(MenuItem).filter_by(id = menu_id).one()
+  if restaurant.user_id != login_session['user_id']:
+    return 'You just can modify your own restaurant.'
   if request.method == 'POST':
       session.delete(itemToDelete)
       session.commit()
@@ -269,7 +289,23 @@ def deleteMenuItem(restaurant_id,menu_id):
   else:
       return render_template('deleteMenuItem.html', item = itemToDelete)
 
+def createUser(login_session):
+  newUser = User(name = login_session['username'], email = login_session['email'], picture = login_session['picture'])
+  session.add(newUser)
+  session.commit()
+  user = session.query(User).filter_by(email = login_session['email']).one()
+  return user.id
 
+def getUserInfo(user_id):
+  user = session.query(User).filter_by(id = user_id).one()
+  return user
+
+def getUserID(email):
+  try:
+    user = session.query(User).filter_by(email = email).one()
+    return user.id
+  except:
+    return None
 if __name__ == '__main__':
   app.secret_key = 'super_secret_key'
   app.debug = True
